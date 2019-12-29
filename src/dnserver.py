@@ -1,8 +1,10 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 import json
 import logging
 import os
 import signal
+import socket
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 from textwrap import wrap
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
+fallback_ipv4 = os.getenv('FALLBACK_IPV4', '127.0.0.1')
+fallback_ipv6 = os.getenv('FALLBACK_IPV6', '::1')
+
 TYPE_LOOKUP = {
     'A': (dns.A, QTYPE.A),
     'AAAA': (dns.AAAA, QTYPE.AAAA),
@@ -38,7 +43,6 @@ TYPE_LOOKUP = {
     'TXT': (dns.TXT, QTYPE.TXT),
     'SPF': (dns.TXT, QTYPE.TXT),
 }
-
 
 class Record:
     def __init__(self, rname, rtype, args):
@@ -77,88 +81,53 @@ class Record:
 
 
 class Resolver(ProxyResolver):
-    def __init__(self, upstream, zone_file):
+    def __init__(self, upstream):
         super().__init__(upstream, 53, 5)
-        self.records = self.load_zones(zone_file)
-
-    def zone_lines(self):
-        current_line = ''
-        for line in zone_file.open():
-            if line.startswith('#'):
-                continue
-            line = line.rstrip('\r\n\t ')
-            if not line.startswith(' ') and current_line:
-                yield current_line
-                current_line = ''
-            current_line += line.lstrip('\r\n\t ')
-        if current_line:
-            yield current_line
-
-    def load_zones(self, zone_file):
-        assert zone_file.exists(), f'zone files "{zone_file}" does not exist'
-        logger.info('loading zone file "%s":', zone_file)
-        zones = []
-        for line in self.zone_lines():
-            try:
-                rname, rtype, args_ = line.split(maxsplit=2)
-
-                if args_.startswith('['):
-                    args = tuple(json.loads(args_))
-                else:
-                    args = (args_,)
-                record = Record(rname, rtype, args)
-                zones.append(record)
-                logger.info(' %2d: %s', len(zones), record)
-            except Exception as e:
-                raise RuntimeError(f'Error processing line ({e.__class__.__name__}: {e}) "{line.strip()}"') from e
-        logger.info('%d zone resource records generated from zone file', len(zones))
-        return zones
 
     def resolve(self, request, handler):
         type_name = QTYPE[request.q.qtype]
         reply = request.reply()
-        for record in self.records:
-            if record.match(request.q):
-                reply.add_answer(record.rr)
 
-        if reply.rr:
-            logger.info('found zone for %s[%s], %d replies', request.q.qname, type_name, len(reply.rr))
+        try:
+            response = socket.gethostbyname_ex(str(request.q.qname));
+
+            print(reply.header.rcode)
+
+            if len(response[2]) > 0:
+                for answer in response[2]:
+                    if ipaddress.ip_address(answer).version == 4:
+                        reply.add_answer(*RR.fromZone(str(request.q.qname) + " 60 A " + answer))
+
+                    else:
+                        reply.add_answer(*RR.fromZone(str(request.q.qname) + " 60 AAAA " + answer));
+
+                return reply
+
+        except: # covers socket.gaierror and OSError
+            reply.add_answer(*RR.fromZone(str(request.q.qname) + " 60 A " + fallback_ipv4))
+            reply.add_answer(*RR.fromZone(str(request.q.qname) + " 60 AAAA " + fallback_ipv6))
             return reply
-
-        # no direct zone so look for an SOA record for a higher level zone
-        for record in self.records:
-            if record.sub_match(request.q):
-                reply.add_answer(record.rr)
-
-        if reply.rr:
-            logger.info('found higher level SOA resource for %s[%s]', request.q.qname, type_name)
-            return reply
-
-        logger.info('no local zone found, proxying %s[%s]', request.q.qname, type_name)
-        return super().resolve(request, handler)
-
 
 def handle_sig(signum, frame):
     logger.info('pid=%d, got signal: %s, stopping...', os.getpid(), signal.Signals(signum).name)
     exit(0)
 
-
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, handle_sig)
 
     port = int(os.getenv('PORT', 53))
-    upstream = os.getenv('UPSTREAM', '8.8.8.8')
-    zone_file = Path(os.getenv('ZONE_FILE', '/zones/zones.txt'))
-    resolver = Resolver(upstream, zone_file)
+    upstream = os.getenv('UPSTREAM', '1.1.1.1')
+    resolver = Resolver(upstream)
     udp_server = DNSServer(resolver, port=port)
     tcp_server = DNSServer(resolver, port=port, tcp=True)
 
-    logger.info('starting DNS server on port %d, upstream DNS server "%s"', port, upstream)
+    logger.info('[DNServer] Starting DNS server on port %d, Upstream DNS server "%s"', port, upstream)
     udp_server.start_thread()
     tcp_server.start_thread()
 
     try:
         while udp_server.isAlive():
             sleep(1)
+
     except KeyboardInterrupt:
         pass

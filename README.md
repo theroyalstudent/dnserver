@@ -1,64 +1,36 @@
-# dnserver
+DNServer (edited)
+===
 
-Simple DNS server written in python for use in development and testing.
+DNS Server written in Python, with some edits (and default responses)
+This is written in order to make Avahi/mDNS records available via DNS, but can be used to expose other records too.
 
-The DNS serves it's own records, if none are found it proxies the request to an upstream DNS server 
-eg. google at `8.8.8.8`.
+## Behaviour
 
-You can setup records you want to serve with a custom `zones.txt` file, 
-see [example_zones.txt](example_zones.txt) for the format.
+- Script uses the `gethostbyname` function for DNS lookup
+	- If records are found, return 
+	- If none are found it proxies the request to an upstream DNS server, eg. CloudFlare at `1.1.1.1`.
+		- If no results are found, return a **hardcoded IP address** (instead of a `NXDOMAIN` response), i.e: `127.0.0.1` / `::1`
 
-To use with docker:
+To change the hardcoded IP address, remember to `export` the following variables before running the installation script:
+- `FALLBACK_IPV4`
+- `FALLBACK_IPV6`
 
-    docker run -p 5053:53/udp -p 5053:53/tcp --rm samuelcolvin/dnserver
+## Installation
 
-(See [dnserver on hub.docker.com](https://hub.docker.com/r/samuelcolvin/dnserver/))
-
-Or with a custom zone file
-
-    docker run -p 5053:53/udp -v `pwd`/zones.txt:/zones/zones.txt --rm samuelcolvin/dnserver
-
-(assuming you have your zone records at `./zones.txt`, 
-TCP isn't required to use `dig`, hence why it's omitted in this case.)
-
-Or see [docker-compose.yml](docker-compose.yml) for example of using dnserver with docker compose. 
-It demonstrates using dnserver as the DNS server for another container which then tries to make DNS queries
-for numerous domains.
-
-To run without docker (assuming you have `dnslib==0.9.7` and python 3.6 installed):
-
-    PORT=5053 ZONE_FILE='./example_zones.txt' ./dnserver.py
-
-You can then test (either of the above) with
-
-```shell
-~ ➤  dig @localhost -p 5053 example.com MX
-...
-;; ANSWER SECTION:
-example.com.		300	IN	MX	5 whatever.com.
-example.com.		300	IN	MX	10 mx2.whatever.com.
-example.com.		300	IN	MX	20 mx3.whatever.com.
-
-;; Query time: 2 msec
-;; SERVER: 127.0.0.1#5053(127.0.0.1)
-;; WHEN: Sun Feb 26 18:14:52 GMT 2017
-;; MSG SIZE  rcvd: 94
-
-~ ➤  dig @localhost -p 5053 tutorcruncher.com MX
-...
-;; ANSWER SECTION:
-tutorcruncher.com.	299	IN	MX	10 aspmx2.googlemail.com.
-tutorcruncher.com.	299	IN	MX	5 alt1.aspmx.l.google.com.
-tutorcruncher.com.	299	IN	MX	5 alt2.aspmx.l.google.com.
-tutorcruncher.com.	299	IN	MX	1 aspmx.l.google.com.
-tutorcruncher.com.	299	IN	MX	10 aspmx3.googlemail.com.
-
-;; Query time: 39 msec
-;; SERVER: 127.0.0.1#5053(127.0.0.1)
-;; WHEN: Sun Feb 26 18:14:48 GMT 2017
-;; MSG SIZE  rcvd: 176
+```
+wget https://raw.githubusercontent.com/theroyalstudent/dnserver/master/scripts/setup.sh -O setup-dnserver.sh && bash setup-dnserver.sh
 ```
 
-You can see that the first query took 2ms and returned results from [example_zones.txt](example_zones.txt),
-the second query took 39ms as dnserver didn't have any records for the domain so had to proxy the query to
-the upstream DNS server.
+Example with the IP addresses hardcoded:
+```
+export FALLBACK_IPV4=1.2.3.4
+export FALLBACK_IPV6=2000:1234:5678:dead:beef
+
+wget https://raw.githubusercontent.com/theroyalstudent/dnserver/master/scripts/setup.sh -O setup-dnserver.sh && bash setup-dnserver.sh
+````
+
+### Copyright
+
+Copyright &copy; 2019 [Edwin A.](https://theroyalstudent.com).
+
+Special thanks to Samuel Colvin for the initial codebase.
